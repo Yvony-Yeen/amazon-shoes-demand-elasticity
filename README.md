@@ -2,7 +2,7 @@
 
 Replication of Bach et al. (2025) *"Adventures in Demand Analysis Using AI"* applied to **Amazon Shoes (Size 8)**, Jan 2025 – Mar 2026, split by **gender × brand tier**.
 
-**Team:** Billy (data/pipeline), Ian (embeddings), Yuhui (clustering), Jyoti (presentation) | Advisor: Guy
+**Team:** Billy, Yuhui, Ian, Jyoti| Advisor: Guy, Ruidong Ma
 
 ---
 
