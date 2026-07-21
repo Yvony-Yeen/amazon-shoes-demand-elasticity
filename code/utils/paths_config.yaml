@@ -1,0 +1,44 @@
+txt:
+  time_independent:
+    128:
+      train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/time_indipendent/train_pred_model-2026-06-30-embdim=None_time_independent_txt_mod4-epoch=021-val_combined_loss=4.1358_txt_dim=128_proj_emb_step=.zip
+      val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/time_indipendent/val_pred_model-2026-06-30-embdim=None_time_independent_txt_mod4-epoch=021-val_combined_loss=4.1358_txt_dim=128_proj_emb_step=.zip
+    256:
+      train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/time_indipendent/train_pred_model-2026-06-30-embdim=None_time_independent_txt_mod4-epoch=025-val_combined_loss=4.0140_txt_dim=256_proj_emb_step=.zip
+      val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/time_indipendent/val_pred_model-2026-06-30-embdim=None_time_independent_txt_mod4-epoch=025-val_combined_loss=4.0140_txt_dim=256_proj_emb_step=.zip
+  lag1:
+    128:
+      train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/lag1/train_pred_model-2026-06-30-embdim=None_lag1_txt_mod4-epoch=021-val_combined_loss=3.9582_txt_dim=128_proj_emb_step=.zip
+      val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/lag1/val_pred_model-2026-06-30-embdim=None_lag1_txt_mod4-epoch=021-val_combined_loss=3.9582_txt_dim=128_proj_emb_step=.zip
+    256:
+      train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/lag1/train_pred_model-2026-06-30-embdim=None_lag1_txt_mod4-epoch=024-val_combined_loss=3.0774_txt_dim=256_proj_emb_step=.zip
+      val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/lag1/val_pred_model-2026-06-30-embdim=None_lag1_txt_mod4-epoch=024-val_combined_loss=3.0774_txt_dim=256_proj_emb_step=.zip
+txtimg:
+  time_independent:
+    128:
+      train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/time_indipendent/train_pred_model-2026-06-14-embdim=None_time_independent_txtimg_mod4-epoch=022-val_combined_loss=2.0133_txtimg_dim=128_proj_emb_step=.zip
+      val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/time_indipendent/val_pred_model-2026-06-14-embdim=None_time_independent_txtimg_mod4-epoch=022-val_combined_loss=2.0133_txtimg_dim=128_proj_emb_step=.zip
+    256:
+      train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/time_indipendent/train_pred_model-2026-06-14-embdim=None_time_independent_txtimg_mod4-epoch=015-val_combined_loss=1.8828_txtimg_dim=256_proj_emb_step=.zip
+      val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/time_indipendent/val_pred_model-2026-06-14-embdim=None_time_independent_txtimg_mod4-epoch=015-val_combined_loss=1.8828_txtimg_dim=256_proj_emb_step=.zip
+  lag1:
+    128:
+      train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/lag1/train_pred_model-2026-06-14-embdim=None_lag1_txtimg_mod4-epoch=016-val_combined_loss=1.8980_txtimg_dim=128_proj_emb_step=.zip
+      val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/lag1/val_pred_model-2026-06-14-embdim=None_lag1_txtimg_mod4-epoch=016-val_combined_loss=1.8980_txtimg_dim=128_proj_emb_step=.zip
+    256:
+      train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/lag1/train_pred_model-2026-06-14-embdim=None_lag1_txtimg_mod4-epoch=018-val_combined_loss=1.6778_txtimg_dim=256_proj_emb_step=.zip
+      val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/lag1/val_pred_model-2026-06-14-embdim=None_lag1_txtimg_mod4-epoch=018-val_combined_loss=1.6778_txtimg_dim=256_proj_emb_step=.zip
+diff_txt:
+  time_independent:
+    train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/time_indipendent/pred_diff_shoes-diff-model-txt_2026-06-30-embdim=768_lag1-epoch=002-val_combined_loss=0.5251_txt_invariant_train.zip
+    val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/time_indipendent/pred_diff_shoes-diff-model-txt_2026-06-30-embdim=768_lag1-epoch=002-val_combined_loss=0.5251_txt_invariant_val.zip
+  lag1:
+    train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/lag1/pred_diff_shoes-diff-model-txt_2026-06-30-embdim=768_lag1-epoch=007-val_combined_loss=0.2939_txt_lag1_train.zip
+    val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txt/lag1/pred_diff_shoes-diff-model-txt_2026-06-30-embdim=768_lag1-epoch=007-val_combined_loss=0.2939_txt_lag1_val.zip
+diff_txtimg:
+  time_independent:
+    train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/time_indipendent/pred_diff_shoes-diff-model-txtimg_2026-06-14-embdim=768_lag1-epoch=005-val_combined_loss=0.5196_txtimg_invariant_train.zip
+    val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/time_indipendent/pred_diff_shoes-diff-model-txtimg_2026-06-14-embdim=768_lag1-epoch=005-val_combined_loss=0.5196_txtimg_invariant_val.zip
+  lag1:
+    train: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/lag1/pred_diff_shoes-diff-model-txtimg_2026-06-14-embdim=768_lag1-epoch=008-val_combined_loss=0.2943_txtimg_lag1_train.zip
+    val: /Users/yvony/PycharmProjects/Amazon_demand_analysis_seperate/data/women_rest_lora/predictions/txtimg/lag1/pred_diff_shoes-diff-model-txtimg_2026-06-14-embdim=768_lag1-epoch=008-val_combined_loss=0.2943_txtimg_lag1_val.zip

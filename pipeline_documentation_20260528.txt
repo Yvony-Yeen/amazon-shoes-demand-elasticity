@@ -1,0 +1,480 @@
+================================================================================
+AMAZON SHOES DEMAND ANALYSIS - COMPLETE PIPELINE DOCUMENTATION
+Replication of Bach et al. (2025) "Adventures in Demand Analysis Using AI"
+Applied to: Amazon Shoes Size 8 | Jan 2025 - Mar 2026
+Split by: gender x brand tier (6 independent buckets)
+Team: Billy (data/pipeline), Ian (embeddings), Yuhui (clustering),
+      Jyoti (presentation) | Advisor: Guy
+
+Doc originally written 2026-04-14 (single Women-only pipeline).
+UPDATED 2026-05-28 to the 6-bucket isolated pipeline. See CHANGES_20260526.md
+and README.md for the refactor log and quick-start.
+================================================================================
+
+
+================================================================================
+0. WHAT CHANGED FROM THE 2026-04-14 VERSION (read this first)
+================================================================================
+
+This pipeline differs from the original single-bucket version on two axes:
+
+1. BRAND-BUCKET ISOLATION
+   The raw dataset is first split into 6 INDEPENDENT buckets (gender x brand
+   tier). Every embedding / training / analysis step runs SEPARATELY per
+   bucket. Mixing categories pollutes embedding weights and produces
+   uninterpretable elasticities for any single subgroup.
+
+     Women x top1  -> women_top1_dream_pairs
+     Women x top2  -> women_top2_idifu
+     Women x other -> women_other
+     Men   x top1  -> men_top1_bruno_marc
+     Men   x top2  -> men_top2_nike
+     Men   x other -> men_other
+
+   Hard rule: no bucket reads another bucket's predictions, embeddings, or
+   model weights. The only intentionally shared artifacts are:
+     - data/images/{ASIN}.jpg          (raw product photos, ASIN-unique)
+     - data/_shared/vartheta/...csv    (category-level Pareto shape theta)
+
+2. STRATIFIED SPLIT MOVED UPSTREAM (00_part2b DELETED)
+   The old 00_part2b_embed_cluster_split.ipynb (frozen RoBERTa + BEiT + SAINT
+   -> PCA -> KMeans -> cluster-stratified split, A100 required) has been
+   REMOVED. The split is now decided cheaply, before any data_preparation
+   step, by brand_split/01_stratified_split.ipynb:
+     - stratify on subcat_aggregated x SALES_RANK quartile, within each bucket
+     - strata with < 4 ASINs merge into OTHER_SMALL
+     - no GPU, runs in seconds, no leakage (keys are product attributes)
+   The assignment is materialized into per-bucket train/val parquets at the
+   TAIL of 00_part1.
+
+3. theta IS SHARED, NOT PER-BUCKET
+   The Pareto shape parameter theta (converts rank-elasticity to demand-
+   elasticity) is a structural parameter of the CATEGORY (shoes). Estimate it
+   once via code/estimate_vartheta_shoes.ipynb and reuse for all 6 buckets.
+
+PER-BUCKET PARAMETER
+   Every per-bucket notebook has ONE line to edit near the top, inside the
+   cell with id 'bucket-output-config':
+       BRAND_BUCKET = 'women_top1_dream_pairs'   # change per bucket run
+   All other paths (DATA_ROOT, DATA_DIR, ANALYSIS_DIR, KEY_DIR, PRED_DIR,
+   OUTPUT_DIR, IMG_DIR) derive automatically from BRAND_BUCKET via a
+   _find_project_root() helper. No /content/ or Google Drive paths remain in
+   code/ - the pipeline runs locally (PyCharm Jupyter or nbconvert).
+
+
+================================================================================
+PHASE 0 - DATASET COLLECTION FROM KEEPA API (historical, run once)
+================================================================================
+
+WHAT IS KEEPA
+  Keepa is a third-party Amazon price tracker storing historical data for
+  millions of products. It exposes a REST API for product metadata, price
+  history, sales rank history, Buy Box data, ratings, review counts. Amazon
+  does not provide historical sales data directly, so Keepa is the source.
+
+  API endpoint : https://api.keepa.com
+  Domain       : 1 (Amazon US)
+  Cost         : 4 tokens per ASIN (1 base + 1 rating + 2 Buy Box)
+  Token refill : 20 tokens per minute on paid plan
+
+HOW THE DATA WAS PULLED - 7 BATCH NOTEBOOKS
+  Pulled in 7 batches by sales rank range (limited Colab runtime + Keepa rate
+  limits made one-shot infeasible):
+
+  amazon_shoes_8_batch1.ipynb   Rank       1 -  10,000
+  amazon_shoes_8_batch2.ipynb   Rank  10,001 -  20,000
+  amazon_shoes_8_batch3.ipynb   Rank  20,001 -  30,000
+  amazon_shoes_8_batch4.ipynb   Rank  30,001 -  40,000
+  amazon_shoes_8_batch5.ipynb   Rank  40,001 -  60,000
+  amazon_shoes_8_batch6.ipynb   Rank  60,001 -  80,000
+  amazon_shoes_8_batch7.ipynb   Rank  80,001 - 100,000
+
+  Date window (all batches):
+    START_DATE = '2025-01-01'
+    END_DATE   = '2026-03-31'
+    DAYS       = 454
+
+KEEPA FILTER PARAMETERS (applied in all batches)
+  categories_exclude : [679320011, 679365011, 679378011, 679433011]
+                       Exclude Costumes, Accessories, unrelated categories
+  title              : 'shoes'           Must contain the word shoes
+  rootCategory       : ['7141123011']    Amazon Shoes root category only
+  type (exclude)     : sandal, shoelace, slipper
+  brand (exclude)    : crocs, flip*flop
+  outOfStockPercentage90_BB_gte: 1       Had some out-of-stock time (active)
+  outOfStockPercentage90_BB_lte: 80      Not perpetually out of stock
+  trackingSince_lte  : 7364640           Anti-backfill guard - tracked pre 2025
+  productType        : [0, 1, 2]         Physical products only
+  size               : ['8']             Size 8 only
+
+  NOTE: a leading exclude-marker before type/brand values is Keepa's syntax
+  for excluding those values.
+
+WHAT EACH BATCH NOTEBOOK DOES
+  Input  : Keepa API (live HTTP, no local input file)
+  Process:
+    1. Query Keepa Finder API with SELECTION filter -> matching ASIN list
+    2. Paginate (100 ASINs/page), cache ASIN list to .txt (resume on crash)
+    3. For each batch of 100 ASINs call Product Data API:
+       stats=1, rating=1, buybox=1, offers=0
+    4. Expand daily history into weekly rows: window=7 and window=28 rolling avg
+    5. Log transforms:
+       SALES_RANK   = log(1 / sales_rank)
+       PRICE        = log(avg_price)
+       BUYBOX_PRICE = log(avg_buybox_price)
+    6. Metadata: text = title|manufacturer|brand|model|color|size ;
+       subcat = leaf category ; image = first image URL
+    7. Save batch parquet
+
+COMBINE STEP (amazon_shoes_8_combine.ipynb)
+  Concatenate all 7 batch parquets, dedupe on (ASIN, date, window), sort, trim
+  weekly-binning overshoot past Mar 31.
+  OUTPUT: amazon_shoes_8_combined.parquet
+    ~1,008,930 rows | 7,761 ASINs | 27 columns | Jan 2025 - Mar 2026
+    Genders: Women (5,472), Men (2,279), Costumes (9), Accessories (1)
+
+  In the current repo this combined file is the single raw input, placed at:
+    data/amazon_shoes_8_combined.parquet      (not committed - ask Billy)
+
+
+================================================================================
+PHASE 1 - BRAND SPLIT (run once total, writes all 6 buckets)
+================================================================================
+
+NOTEBOOK: brand_split/00_brand_filter.ipynb            CPU | not per-bucket
+  INPUT  : data/amazon_shoes_8_combined.parquet
+  OUTPUT : data/<bucket>/amazon_shoes_8_combined.parquet   (x6, bucket-filtered)
+  Splits the combined raw file into the 6 gender x brand-tier buckets.
+
+NOTEBOOK: brand_split/01_stratified_split.ipynb        CPU | not per-bucket
+  INPUT  : data/<bucket>/amazon_shoes_8_combined.parquet
+  OUTPUT : data/<bucket>/keys/asin_split.csv               (x6)
+           columns: ASIN, stratum, split
+  Loops over all 6 buckets in one pass. Stratifies on
+  subcat_aggregated x SALES_RANK quartile within each bucket; strata with
+  < 4 ASINs merge into OTHER_SMALL. 50/50 ASIN-level split, seed=42.
+  This REPLACES the old embedding/cluster split (00_part2b, deleted).
+
+
+================================================================================
+PHASE 2 - DATA PREPARATION (run for EACH of the 6 buckets)
+================================================================================
+Location: data_preparation/   | edit BRAND_BUCKET at the top of each notebook.
+
+--------------------------------------------------------------------------------
+NOTEBOOK: 00_part1_data_preparation.ipynb              CPU
+--------------------------------------------------------------------------------
+INPUT
+  data/<bucket>/amazon_shoes_8_combined.parquet
+  data/<bucket>/keys/asin_split.csv   (from brand_split/01)
+
+OUTPUT (all under data/<bucket>/)
+  amzn_shoes_monthly_diffs_ffill_fixed_splits/all_products_clean.parquet
+  amzn_shoes_monthly_diffs_ffill_fixed_splits/train-00000-of-00001.parquet
+  amzn_shoes_monthly_diffs_ffill_fixed_splits/validation-00000-of-00001.parquet
+  keys/main_train_keys.csv
+  keys/main_val_keys.csv
+
+PROCESS
+  1. Load bucket parquet, parse dates
+  2. Remove dirty ASINs (wrong gender/size, fully-NaN SALES_RANK/PRICE/
+     RATING/REVIEW_COUNT)
+  3. Drop 9 unused columns: SALES_RANK_original, PRICE_original,
+     BUYBOX_PRICE_original, gender, manufacturer, brand, model, color, size
+  4. Fix dtypes: window to float64, FBA/FBM offer counts filled with 0
+  5. Rebuild subcat_aggregated from top-10 subcategories; all others -> "Other"
+  6. CRITICAL - fill BEFORE trim:
+       Jan/Feb 2025 rows act as a forward-fill seed for March.
+       BUYBOX_PRICE: ffill then bfill (products that gained a Buy Box mid-window
+         have leading NaN with no prior value to carry forward; bfill carries
+         the first known price backward).
+       All other columns: ffill only.
+  7. Trim to analysis window (date >= 2025-03-01)
+  8. NaN-flag columns on the trimmed window (is_*_filled)
+  9. Drop incomplete ASINs:
+       BUYBOX_PRICE: drop only if 100% NaN over the year (threshold 0.999)
+       Other columns: drop if any NaN remains after fill
+ 10. Reorder to 17-column paper schema, drop flag columns, save clean parquet
+ 11. TAIL STEP - apply the pre-computed stratified split:
+       load keys/asin_split.csv, subset all_products_clean by split assignment,
+       write train / validation parquets + main_train_keys.csv / main_val_keys.csv.
+       Reports how many split-assigned ASINs were dropped by cleaning.
+
+  Example (women_top1_dream_pairs, tested end-to-end):
+    447 ASINs -> 442 after cleaning -> Train 221 ASINs / Val 221 ASINs,
+    25,194 rows each.
+
+OUTPUT PARQUET COLUMNS (17)
+  ASIN, window, date, SALES_RANK, PRICE, BUYBOX_PRICE, text, RATING,
+  REVIEW_COUNT, subcat, subcat_aggregated, New Offer Count: Current,
+  Count of retrieved live offers: New FBA,
+  Count of retrieved live offers: New FBM,
+  Lightning Deals: Upcoming Deal, Buy Box: Is FBA, image
+
+--------------------------------------------------------------------------------
+NOTEBOOK: 00_part2_download_images.ipynb               CPU + network
+--------------------------------------------------------------------------------
+INPUT  : data/<bucket>/amzn_shoes_monthly_diffs_ffill_fixed_splits/ (ASIN + URL)
+OUTPUT : data/images/{ASIN}.jpg     (SHARED across buckets, keyed by ASIN)
+  Skips already-downloaded images, so running the largest bucket
+  (women_other) first lets later buckets reuse images. Expected total across
+  all 6 buckets: ~6,500 unique JPEGs.
+  3 retries, 0.2s sleep, convert to RGB.
+
+--------------------------------------------------------------------------------
+NOTEBOOK: 00_part5_create_image_parquet.ipynb          CPU
+--------------------------------------------------------------------------------
+INPUT  : data/images/{ASIN}.jpg
+OUTPUT : data/<bucket>/amzn_shoes_monthly_avg_long_ffill_28_7_images/
+           16 parquet files (4 shards x 4 parts), columns: ASIN, bytes
+  Notebook 01_1 reads images as raw bytes from a parquet column
+  (Image.open(io.BytesIO(...))), not from individual JPEGs - this builds that
+  lookup table. Each image resized to 224x224 (BEiT input), JPEG quality 90.
+
+--------------------------------------------------------------------------------
+NOTEBOOKS: 00_part3a / 3b / 3c / 3d - embedding model training   GPU (A100)
+--------------------------------------------------------------------------------
+THE 4 VARIANTS (one notebook each, to fit Colab/GPU session limits)
+  3a: txtimg + lag1          Text+Image+Tabular, lag-1 time features
+  3b: txtimg + time_ind      Text+Image+Tabular, no lag
+  3c: txt + lag1             Text-only, lag-1 time features
+  3d: txt + time_ind         Text-only, no lag
+
+INPUT
+  data/<bucket>/amzn_shoes_monthly_diffs_ffill_fixed_splits/ (train + val)
+  data/images/{ASIN}.jpg  (3a, 3b only)
+OUTPUT
+  data/<bucket>/predictions/txtimg/{lag1,time_indipendent}/   (zips)
+  data/<bucket>/predictions/txt/{lag1,time_indipendent}/      (zips)
+
+MODEL ARCHITECTURE (Bach et al. 2025, Appendix G)
+  Text encoder    : RoBERTa (cardiffnlp/twitter-roberta-base) -> 768
+  Image encoder   : BEiT (microsoft/beit-base-patch16-224)    -> 768
+  Tabular encoder : SAINT (pytorch-widedeep 1.7.0)            -> 768
+  Fusion          : LayerNorm -> Cross Attention -> FC -> 256-dim embedding
+  Heads           : FC -> Q_hat (SALES_RANK), FC -> P_hat (PRICE)
+TRAINING CONFIG
+  WINDOW=28, MOD=4, MAX_PERIODS=53, BATCH_SIZE=32
+  EPOCHS_LEVEL=25 (predict Q_t, P_t), EPOCHS_DIFF=15 (predict dQ_t, dP_t)
+  LR=2e-5, EMB_DIMS=[128, 256], AdamW + cosine annealing
+  These 4 notebooks are the ONLY GPU stages. 4 variants x 6 buckets = 24 runs.
+
+--------------------------------------------------------------------------------
+NOTEBOOK: 00_part4_verify.ipynb                        CPU (optional)
+--------------------------------------------------------------------------------
+  Sanity report (no files saved): checks the prediction zips exist and load,
+  row counts are consistent, ASIN/date keys align with
+  data/<bucket>/keys/main_train_keys.csv and main_val_keys.csv.
+
+
+================================================================================
+PHASE 3 - ANALYSIS (code/, run for EACH of the 6 buckets)
+================================================================================
+Edit BRAND_BUCKET at the top of each notebook (cell id 'bucket-output-config').
+All inputs/outputs are bucket-scoped under data/<bucket>/.
+
+--------------------------------------------------------------------------------
+NOTEBOOK: 01_1_create_dataset_txt_img.ipynb            (txtimg)
+NOTEBOOK: 01_2_create_dataset_txt.ipynb                (txt-only)
+--------------------------------------------------------------------------------
+INPUT
+  DATA_DIR  = data/<bucket>/amzn_shoes_monthly_diffs_ffill_fixed_splits/
+  PRED_DIR  = data/<bucket>/predictions/...   (via utils/paths_config.yaml)
+  KEY_DIR   = data/<bucket>/keys/  (main_train_keys.csv, main_val_keys.csv)
+OUTPUT
+  ANALYSIS_DIR = data/<bucket>/analysis_datasets/
+    dataset_txt_only_False_embeddings_True_{train,val}.zip   (01_1)
+    dataset_txt_only_True_embeddings_True_{train,val}.zip    (01_2)
+PROCESS
+  Load panels (window=28, every 4th step), dummy subcat + date, join level and
+  diff predictions by (ASIN, date), compute lag-1/-2 and first differences,
+  normalize/center embeddings, PCA(5), KMeans(5) cosine similarities, 5 nearest
+  neighbors + distances, neighbor-weighted lagged Buy Box prices. Save zips.
+  01_2 differs only in txt_only=True (RoBERTa embeddings only, no BEiT/SAINT).
+
+--------------------------------------------------------------------------------
+NOTEBOOK: 02_cluster_centroid_products.ipynb
+NOTEBOOK: 02_cluster_centroid_products_random20.ipynb   (variant: 20 random/cluster)
+--------------------------------------------------------------------------------
+INPUT
+  ANALYSIS_DIR datasets (txtimg + txt zips)
+  data/<bucket>/amzn_shoes_monthly_avg_long_ffill_28_7_images/ (product images)
+OUTPUT
+  data/<bucket>/output/cluster_centroid/            collage_cluster_{img,txt}_{0-4}.png, elbow_test.png
+  data/<bucket>/output/cluster_centroid_random20/   (random20 variant)
+PURPOSE
+  Qualitative check that the 5 clusters make product-level sense (helps explain
+  CATE heterogeneity in stage 04). Font loading is cross-platform: tries macOS
+  Arial, then Linux DejaVu, then PIL's bundled font.
+
+--------------------------------------------------------------------------------
+NOTEBOOKS: 03_1 (txtimg) / 03_2 (txt-only) - predictive performance
+--------------------------------------------------------------------------------
+INPUT  : the matching ANALYSIS_DIR dataset zips
+OUTPUT : data/<bucket>/output/predictive_performance_txt_img/  (03_1)
+         data/<bucket>/output/predictive_performance_txt/      (03_2)
+  R2 on test set for Outcome (Q_t) and Treatment (P_bb_t) across OLS / Boosting
+  with Tabular, +PCA, +Similarities, +Embeddings, plus Deep time-independent
+  and time-dependent. Run on both level and diff data.
+
+--------------------------------------------------------------------------------
+NOTEBOOK: 04_evaluation_final_all.ipynb  - PRIMARY DoubleML analysis
+--------------------------------------------------------------------------------
+INPUT  : ANALYSIS_DIR dataset_txt_only_False_embeddings_True_{train,val}.zip
+         data/_shared/vartheta/vartheta_estimates_shoes.csv  (theta)
+OUTPUT : data/<bucket>/output/evaluation_final_all/
+PROCESS
+  Delta variables + neighbor prices. DoubleML Partial Linear Regression:
+     Q_t = theta_price * P_bb_t + g(X) + eps   (LightGBM nuisance learners)
+  Basis: subcat dummies + cluster similarities + date dummies.
+  ATE (avg elasticity), CATE (per cluster), chi-squared heterogeneity test.
+  THEN converts rank-elasticity -> demand-elasticity using the shared theta.
+  (This conversion is what makes this the "final" notebook vs the older
+  04_evaluation / 04_evaluation_v2_delta, both deleted.)
+
+OTHER 04 NOTEBOOKS
+  04_evaluation_iv_final.ipynb   IV approach to elasticity (independent method)
+                                 -> data/<bucket>/output/evaluation_iv/
+  04_scenario1_flats_only.ipynb        single-subcat subsample
+                                 -> output/scenario1_flats/
+  04_scenario2_excl_top500.ipynb       exclude top-500 sales-rank ASINs
+                                 -> output/scenario2_excl_top500/
+  04_scenario3_excl_top500_flats.ipynb combined
+                                 -> output/scenario3_excl_top500_flats/
+  Scenario notebooks write their subset key CSVs as subset_*_keys.csv inside
+  their own output dir (NOT the canonical keys/ files).
+
+
+================================================================================
+SHARED (run once total, NOT per-bucket)
+================================================================================
+NOTEBOOK: code/estimate_vartheta_shoes.ipynb           CPU
+  Estimates the Pareto shape parameter theta for shoes on the full dataset.
+  OUTPUT: data/_shared/vartheta/vartheta_estimates_shoes.csv
+  theta is category-level and reused by 04_evaluation_final_all for ALL buckets.
+  IMPORTANT: the paper's toy theta (~0.5, He & Hollenbeck 2020 baseline) does
+  NOT apply to shoes - use this shoes-specific estimate.
+
+
+================================================================================
+RECOMMENDED RUN ORDER
+================================================================================
+  ONCE        : brand_split/00 -> brand_split/01
+  PER BUCKET  : part1 -> part2 -> part5 -> part3a -> part3b -> part3c -> part3d
+                -> part4
+                -> code/01_1 -> code/01_2 -> code/02 -> code/03_1 -> code/03_2
+                -> code/04_evaluation_final_all (+ IV / scenario variants)
+  ONCE        : code/estimate_vartheta_shoes
+  Only part3a-d need a GPU; everything else is CPU.
+
+
+================================================================================
+FINAL FOLDER STRUCTURE (after a complete run of all 6 buckets)
+================================================================================
+  data/
+    amazon_shoes_8_combined.parquet              raw input (from Keepa)
+    images/{ASIN}.jpg                            shared, ~6.5k JPEGs
+    _shared/vartheta/vartheta_estimates_shoes.csv  theta (shared)
+    <bucket>/                                    6 of these
+      amazon_shoes_8_combined.parquet            bucket-filtered raw
+      amzn_shoes_monthly_diffs_ffill_fixed_splits/
+        all_products_clean.parquet
+        train-00000-of-00001.parquet
+        validation-00000-of-00001.parquet
+      amzn_shoes_monthly_avg_long_ffill_28_7_images/
+        train-0000{0-3}-of-00004-part00{0-3}.parquet   (16 image parquets)
+      keys/
+        asin_split.csv                           from brand_split/01
+        main_train_keys.csv                      from part1
+        main_val_keys.csv                        from part1
+      predictions/                               from part3a-d (GPU)
+        txtimg/{lag1,time_indipendent}/
+        txt/{lag1,time_indipendent}/
+      analysis_datasets/                         from code/01_*
+        dataset_txt_only_{True,False}_embeddings_True_{train,val}.zip
+      output/                                    from code/02-04
+        cluster_centroid/  cluster_centroid_random20/
+        predictive_performance_txt_img/  predictive_performance_txt/
+        evaluation_final_all/  evaluation_iv/
+        scenario1_flats/  scenario2_excl_top500/  scenario3_excl_top500_flats/
+  brand_split/
+    00_brand_filter.ipynb
+    01_stratified_split.ipynb
+  data_preparation/
+    00_part1_data_preparation.ipynb
+    00_part2_download_images.ipynb
+    00_part3a/b/c/d_train_*.ipynb
+    00_part4_verify.ipynb
+    00_part5_create_image_parquet.ipynb
+  code/
+    01_1_create_dataset_txt_img.ipynb   01_2_create_dataset_txt.ipynb
+    02_cluster_centroid_products.ipynb  02_cluster_centroid_products_random20.ipynb
+    03_1_predictive_performance_txt_img.ipynb  03_2_predictive_performance_txt.ipynb
+    04_evaluation_final_all.ipynb       04_evaluation_iv_final.ipynb
+    04_scenario1_flats_only.ipynb       04_scenario2_excl_top500.ipynb
+    04_scenario3_excl_top500_flats.ipynb
+    estimate_vartheta_shoes.ipynb
+    requirements.txt   utils/
+
+
+================================================================================
+UTILITY FILES
+================================================================================
+utils/paths_config.yaml
+  Maps (modality, lag_type, emb_dim, split) -> prediction zip paths.
+  Used by load_pred_and_emb() in 01_1 and 01_2. Update when new training runs
+  produce new zip filenames.
+utils/utils_data2.py
+  load_pred_and_emb, center_and_norm, get_pca, get_cluster, get_similarities,
+  add_lags_and_scale_data, compute_neighbors_and_distances,
+  compute_neighbor_weighted_prices_lagged, generate_basis, generate_interactions
+utils/utils_models.py
+  iv_model, lin_model, lin_model_cate, summarize_lin_model, summarize_dml,
+  chi2_test, predict_cate
+code/requirements.txt
+  Package versions for notebooks 01-04. SAINT (pytorch-widedeep) historically
+  installed separately in the Part 3 notebooks to bypass dependency conflicts.
+
+
+================================================================================
+KEY VARIABLE DEFINITIONS
+================================================================================
+Q_t          = SALES_RANK = log(1/sales_rank) - quantity/demand signal
+P_bb_t       = BUYBOX_PRICE = log(buy_box_price) - treatment (price)
+Delta_Q_t    = Q_t - Q_{t-1}   (first difference of quantity)
+Delta_P_bb_t = P_bb_t - P_{t-1} (first difference of price)
+window=28    = 28-day rolling average (used for modeling)
+mod=4        = every 4th time step (approximately monthly)
+pred_ml_l    = level model prediction for Q_t
+pred_ml_m    = level model prediction for P_bb_t
+_diff suffix = diff model prediction for Delta_Q_t / Delta_P_bb_t
+_lag_1       = from the lag-1 model variant
+emb_0..255   = 256-dim product embedding from the fusion model
+pca_0..4     = first 5 PCA components of embeddings
+similarity_cluster_0..4 = cosine similarity to each KMeans centroid
+theta_price  = price elasticity of demand (key causal estimate)
+theta (Pareto) = shape parameter converting rank-elasticity to demand-elasticity
+ATE          = Average Treatment Effect (avg theta_price across products)
+CATE         = Conditional ATE (theta_price per cluster)
+
+
+================================================================================
+NOTES ON PAPER FIDELITY
+================================================================================
+Follows Bach et al. (2025) arxiv 2501.00382. Intentional differences:
+
+1. Dataset : Amazon Shoes Size 8 (Jan 2025 - Mar 2026), split into 6
+             gender x brand-tier buckets, vs Amazon Toy Cars (2023-2024).
+2. Batches : 7 batches by sales rank range 1-100,000.
+3. Split   : cheap upstream stratified 50/50 (subcat x SALES_RANK quartile per
+             bucket), decided before data_preparation. The earlier embedding-
+             cluster split (00_part2b) was removed. Paper used 80/20.
+4. BUYBOX fill: ffill + bfill for BUYBOX_PRICE (vs ffill only).
+5. theta   : shoes-specific Pareto theta estimated on the full dataset and
+             shared across buckets, NOT the paper's toy theta ~ 0.5.
+
+Reference repo: github.com/JanTeichertKluge/demand-analysis-repro
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================

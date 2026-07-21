@@ -1,0 +1,38 @@
+# Claude Code local config & memory (keep local, never commit)
+.claude/
+
+# macOS
+.DS_Store
+
+# PyCharm / JetBrains
+.idea/
+
+# All data — large/regenerable, never commit.
+# Classmates regenerate it from brand_split/ + data_preparation/00_part1.
+# (both cases: macOS filesystem is case-insensitive, git index has historical "Data/")
+/data/
+/Data/
+
+# Python caches / build
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Anaconda / PyCharm project scratch
+anaconda_projects/
+/Downloads/
+
+# Logs & temp
+*.log
+_run_logs/
+scratchpad/
+
+# Build/ship archives
+*.tgz
+*.tar.gz
